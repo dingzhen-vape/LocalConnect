@@ -1,0 +1,25 @@
+# ---- Python ----
+server/.venv/
+__pycache__/
+*.py[cod]
+
+# ---- Android / Gradle ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.apk
+*.aab
+
+# ---- 运行时产物（测试上传的文件，不是源码）----
+server/uploads/
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+
+# ---- 系统 ----
+Thumbs.db
+Desktop.ini
