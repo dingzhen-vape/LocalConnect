@@ -23,3 +23,5 @@ server/uploads/
 # ---- 系统 ----
 Thumbs.db
 Desktop.ini
+
+server/test.bin
