@@ -38,8 +38,13 @@ dependencies {
     implementation("com.google.android.material:material:1.10.0")
     implementation("androidx.activity:activity:1.8.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
-    // OkHttp：Android 上最主流的网络库，WebSocket 支持也由它提供
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Ktor 客户端：协程优先的网络库，WebSocket 用法是 for (frame in incoming) 这种顺序写法
+    implementation("io.ktor:ktor-client-core:3.6.0")
+    implementation("io.ktor:ktor-client-cio:3.6.0")
+    implementation("io.ktor:ktor-client-websockets:3.6.0")
+    // 协程：Ktor 的挂起函数需要协程作用域来跑
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
