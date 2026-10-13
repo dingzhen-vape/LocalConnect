@@ -5,6 +5,25 @@
     <!-- 联网必备。不加这条，任何网络请求都会被系统直接拒绝。 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      读取相册图片的权限。必须按系统版本声明两条：
+
+      API 33 (Android 13) 起，Google 把媒体读取权限拆成了三个细分的权限
+      （图片 / 视频 / 音频），READ_EXTERNAL_STORAGE 不再作用于媒体文件。
+      所以：
+        - API 33+ 的设备认 READ_MEDIA_IMAGES
+        - API 29~32 的设备只认 READ_EXTERNAL_STORAGE
+
+      maxSdkVersion="32" 表示这条只在 API 32 及以下生效，
+      避免在新系统上申请一个已被废弃的权限。
+
+      注意：这里只是【声明】。真正弹窗要用户同意，还得在代码里做运行时申请。
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+            android:name="android.permission.READ_EXTERNAL_STORAGE"
+            android:maxSdkVersion="32" />
+
     <application
             android:allowBackup="true"
             android:dataExtractionRules="@xml/data_extraction_rules"

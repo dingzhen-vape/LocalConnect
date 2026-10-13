@@ -12,7 +12,11 @@ android {
 
     defaultConfig {
         applicationId = "com.yalu.localconnect"
-        minSdk = 26
+        // 29 而不是 26：需要 ContentResolver.loadThumbnail()（API 29 引入）来安全地
+        // 生成缩略图。它的好处是内部按目标尺寸解码，不会把整张原图读进内存
+        // （一张 4000x3000 的照片直接解码要占约 48MB，几十张必然 OOM）。
+        // 当前真机是 API 36、模拟器是 API 37，提到 29 不损失任何设备覆盖。
+        minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
