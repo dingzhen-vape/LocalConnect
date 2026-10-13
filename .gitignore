@@ -13,8 +13,10 @@ android/.idea/
 *.apk
 *.aab
 
-# ---- 运行时产物（测试上传的文件，不是源码）----
+# ---- 运行时产物（测试数据、日志，都不是源码）----
 server/uploads/
+server/test.bin
+server-serverlog.txt
 
 # ---- 编辑器 ----
 .vscode/
