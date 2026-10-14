@@ -21,6 +21,9 @@ server-serverlog.txt
 # 用 tools/ 下脚本生成的测试图片（推送到模拟器相册用的），不是项目资源
 tools/test-images/
 
+# 服务端测试用的图片
+server/test/
+
 # ---- 编辑器 ----
 .vscode/
 .idea/
