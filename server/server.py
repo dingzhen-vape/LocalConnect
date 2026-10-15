@@ -2,7 +2,6 @@
 import asyncio
 import io
 import json
-import typing
 from pathlib import Path
 from typing import Callable
 
@@ -68,10 +67,23 @@ class ServerCore:
 
     async def start(self):
         """启动服务，并一直运行下去。"""
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         async with websockets.serve(self.handleConnection, "0.0.0.0", SERVER_PORT):
             logger.info(f"监听 ws://0.0.0.0:{SERVER_PORT} ...")
             await asyncio.Future()          # 永远等下去，别让协程退出
+
+    def saveThumbsToDisk(self):
+        """把内存里的缩略图写到 uploads/。
+
+        写盘是为了下次启动时 app.py 能读回来（见 loadCachedThumbnails）——
+        否则每次重启窗口都是空的，得等手机重发。
+        写入失败不影响接收：内存里的那份还在，界面照常显示。
+        """
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        for thumb_id, data in self.thumbs.items():
+            try:
+                (UPLOAD_DIR / f"thumb_{thumb_id}.jpg").write_bytes(data)
+            except OSError as e:
+                logger.warning(f"缩略图 {thumb_id} 写盘失败: {e}")
 
     async def handleConnection(self, ws):
         """处理一条客户端连接。"""
@@ -80,7 +92,6 @@ class ServerCore:
         # 连上先握手：让客户端知道「服务端活着」
         await ws.send(json.dumps({"type": "hello", "server": "py-localconnect"}))
 
-        file_name = None                                       # 正在收的文件名
         thumb_id = None                                        # 正在收的缩略图 id
         state = Enums.States.IDLE
         mode = None
@@ -89,18 +100,7 @@ class ServerCore:
             if isinstance(msg, str):                           # 文本帧 = 控制消息
                 m = json.loads(msg)
 
-                if m["type"] == "upload_begin":
-                    file_name = m["name"]
-                    state = Enums.States.UP_LOADING
-                    mode = Enums.Modes.FILE
-                    logger.info(f"开始接收文件: {file_name}")
-
-                elif m["type"] == "upload_end":
-                    await ws.send(json.dumps({"type": "ack", "saved": file_name}))
-                    logger.info(f"文件接收完成: {file_name}")
-                    state = Enums.States.IDLE
-
-                elif m["type"] == "thumb_begin":
+                if m["type"] == "thumb_begin":
                     thumb_id = str(m["id"])                    # 统一成字符串
                     state = Enums.States.UP_LOADING
                     mode = Enums.Modes.THUMB
@@ -111,6 +111,7 @@ class ServerCore:
 
                 elif m["type"] == "thumb_done":
                     logger.info(f"本批共 {m['count']} 张，内存中累计 {len(self.thumbs)} 张")
+                    self.saveThumbsToDisk()
                     state = Enums.States.IDLE
                     mode = None
 
@@ -120,9 +121,5 @@ class ServerCore:
                     self.thumbs[thumb_id] = msg
                     logger.debug(f"缩略图 {thumb_id} 已存入内存: {len(msg)} 字节")
                     self.on_thumbnail(thumb_id, msg)
-
-                elif mode == Enums.Modes.FILE and state == Enums.States.UP_LOADING:
-                    with open(UPLOAD_DIR / file_name, "ab") as f:
-                        f.write(msg)
 
         logger.info(f"客户端断开: {ws.remote_address}")

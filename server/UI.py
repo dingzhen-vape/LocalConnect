@@ -7,9 +7,12 @@ LocalConnect 电脑端界面
 缩略图数据格式：dict[str, bytes]，键是图片 id，值是 JPEG 字节。
 """
 
+import ctypes
+import sys
+
 from loguru import logger
-from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import QSize, Qt, QTimer
+from PyQt6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
@@ -21,6 +24,56 @@ from PyQt6.QtWidgets import (
 # 每个格子的显示尺寸（像素）。图片会等比缩放到「能放进去」为止，
 # 不足的部分留白——绝不裁剪，也不改变比例。
 CELL_SIZE = 160
+
+
+# ============================================================================
+#  Windows 毛玻璃（DWM Acrylic）
+# ============================================================================
+
+class MARGINS(ctypes.Structure):
+    _fields_ = [
+        ("cxLeftWidth", ctypes.c_int),
+        ("cxRightWidth", ctypes.c_int),
+        ("cyTopHeight", ctypes.c_int),
+        ("cyBottomHeight", ctypes.c_int),
+    ]
+
+
+def extendFrameIntoClientArea(hwnd: int):
+    """把窗口框架的玻璃区域延伸到整个客户区。
+
+    DWM 的材质默认只画在标题栏，客户区是 Qt 自己画的实心底色。
+    传 -1 表示「整宽/整高」，玻璃区就铺满整个窗口了。
+    """
+    m = MARGINS()
+    m.cxLeftWidth = m.cxRightWidth = -1
+    m.cyTopHeight = m.cyBottomHeight = -1
+    ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
+
+
+def setupAcrylic(hwnd: int):
+    """给窗口应用 Acrylic 毛玻璃，并把标题栏切成深色。
+
+    只有 Windows 11 22H2 以上支持 SYSTEMBACKDROP_TYPE。
+    其他系统上静默跳过——调用失败不影响程序运行，只是没有毛玻璃。
+    """
+    dwm = ctypes.windll.dwmapi
+
+    # 标题栏深色：不设的话标题栏是浅色，和深色界面凑在一起显得割裂
+    dark = ctypes.c_int(1)
+    dwm.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark), ctypes.sizeof(dark))
+
+    # 背景材质 = Acrylic（3）
+    backdrop = ctypes.c_int(3)
+    ok = dwm.DwmSetWindowAttribute(
+        hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop)
+    )
+    extendFrameIntoClientArea(hwnd)
+
+    if ok == 0:
+        logger.info("毛玻璃背景已启用（Acrylic）")
+    else:
+        logger.warning("当前系统不支持 Acrylic 背景，已降级为纯色")
 
 
 class MainWindow(QMainWindow):
@@ -44,7 +97,24 @@ class MainWindow(QMainWindow):
         # 已显示过的 id。同一张重复发来时跳过，否则界面会堆满重复的图。
         self._shown: set[str] = set()
 
+        # 让窗口背景真正透明，DWM 的材质才能透出来。
+        # 必须在 show() 之前设置，否则不生效。
+        # 代价：窗口的"不透明区域"由我们自己决定，所以子控件也必须透明。
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
         self.buildUI()
+
+        # 等窗口真正显示后再应用毛玻璃 —— 那时 winId() 才是有效句柄
+        QTimer.singleShot(0, self.applyAcrylic)
+
+    def applyAcrylic(self):
+        """窗口显示后应用毛玻璃。非 Windows 系统直接跳过。"""
+        if sys.platform != "win32":
+            return
+        try:
+            setupAcrylic(int(self.winId()))
+        except Exception as e:
+            logger.warning(f"毛玻璃设置失败（不影响使用）: {e}")
 
     # ------------------------------------------------------------------
     #  界面搭建
@@ -76,7 +146,7 @@ class MainWindow(QMainWindow):
             QListWidget {
                 border: none;
                 outline: none;
-                background: #2b2b2b;
+                background: transparent;
                 padding: 0px;
             }
             QListWidget::item {
@@ -91,6 +161,14 @@ class MainWindow(QMainWindow):
         )
 
         self.setCentralWidget(self.listWidget)
+
+        # 各层都透明，否则会盖住 DWM 的毛玻璃材质
+        for widget in (self, self.listWidget):
+            widget.setAutoFillBackground(False)
+            palette = widget.palette()
+            palette.setColor(QPalette.ColorRole.Window, QColor(0, 0, 0, 0))
+            palette.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
+            widget.setPalette(palette)
 
     # ------------------------------------------------------------------
     #  对外接口：由 app.py 调用
