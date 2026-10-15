@@ -1,1 +1,12 @@
 websockets>=17.0
+
+# 日志
+loguru>=0.7.0    # 结构化日志，带时间戳与行号，替代 print
+
+# 剪贴板（仅 Windows 服务端需要）
+Pillow>=12.0     # 解码 JPEG/PNG 并转成剪贴板需要的 BMP/DIB 格式
+pywin32>=310     # 提供 win32clipboard 模块，操作 Windows 剪贴板
+
+# 界面
+PyQt6>=6.6       # 电脑端窗口，显示缩略图
+qasync>=0.27     # 把 Qt 事件循环桥接给 asyncio（Qt 和 asyncio 都需要事件循环，主线程只能跑一个）
