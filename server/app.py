@@ -89,18 +89,15 @@ def main() -> int:
     window = MainWindow()
     window.show()
 
-    # 默认加载 uploads/ 里已有的缩略图，方便一打开就确认界面是通的。
-    # 加 --no-cache 可以跳过，用来纯测实时接收。
-    if "--no-cache" not in sys.argv:
-        for cached_id, cached_data in loadCachedThumbnails().items():
-            window.addThumbnail(cached_id, cached_data)
-        if window.thumbnailCount:
-            logger.info(f"已从 uploads/ 加载 {window.thumbnailCount} 张缓存缩略图")
-
     # 服务端每收到一张缩略图就回调这里 → 直接更新界面。
     # 因为 qasync 让两者跑在同一线程，所以不需要跨线程信号。
-    core = ServerCore(on_thumbnail=window.addThumbnail)
+    core = ServerCore(window)
     loop.create_task(core.start())
+
+    def onFetchOriginal(thumb_id: str):
+        loop.create_task(core.doFetchOriginalPicture(thumb_id))
+
+    window.fetchRequested.connect(onFetchOriginal)
 
     logger.info("界面已就绪，等待手机连接…")
 

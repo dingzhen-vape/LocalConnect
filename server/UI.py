@@ -11,7 +11,7 @@ import ctypes
 import sys
 
 from loguru import logger
-from PyQt6.QtCore import QSize, Qt, QTimer
+from PyQt6.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QListWidget,
@@ -29,6 +29,7 @@ CELL_SIZE = 160
 # ============================================================================
 #  Windows 毛玻璃（DWM Acrylic）
 # ============================================================================
+
 
 class MARGINS(ctypes.Structure):
     _fields_ = [
@@ -86,6 +87,8 @@ class MainWindow(QMainWindow):
     拖动和缩放也由系统处理，不用自己实现。
     """
 
+    fetchRequested = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LocalConnect")
@@ -139,7 +142,7 @@ class MainWindow(QMainWindow):
         self.listWidget.setSpacing(0)
         self.listWidget.setContentsMargins(0, 0, 0, 0)
         self.listWidget.setUniformItemSizes(True)
-
+        self.listWidget.installEventFilter(self)
         # Ditto 风格：深色背景 + 格子之间留细缝做分隔
         self.listWidget.setStyleSheet(
             """
@@ -198,9 +201,9 @@ class MainWindow(QMainWindow):
         )
 
         item = QListWidgetItem(QIcon(pixmap), "")
-        item.setToolTip(f"id: {thumb_id}")                        # 悬浮显示 id
+        item.setToolTip(f"id: {thumb_id}")  # 悬浮显示 id
         item.setSizeHint(QSize(CELL_SIZE, CELL_SIZE))
-        item.setData(Qt.ItemDataRole.UserRole, thumb_id)          # 存 id，供后续取用
+        item.setData(Qt.ItemDataRole.UserRole, thumb_id)  # 存 id，供后续取用
         self.listWidget.addItem(item)
 
         self._shown.add(thumb_id)
@@ -220,3 +223,23 @@ class MainWindow(QMainWindow):
         if not items:
             return None
         return items[0].data(Qt.ItemDataRole.UserRole)
+
+    def fetchSelectedOriginal(self):
+        """按选中的 id 请求原图。"""
+        thumb_id = self.selectedThumbId()
+        if thumb_id is None:
+            logger.info("没有选中任何缩略图，Ctrl+C 忽略")
+            return
+        logger.info(f"请求原图: {thumb_id}")
+        self.fetchRequested.emit(thumb_id)
+
+    def eventFilter(self, obj, event):
+        """拦下 listWidget 上的 Ctrl+C。"""
+        if obj is self.listWidget and event.type() == QEvent.Type.KeyPress:  # noqa: SIM102
+            if event.key() == Qt.Key.Key_C and (
+                event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            ):
+                self.fetchSelectedOriginal()
+                return True  # ★ 必须 True，否则 listWidget 会再处理一遍
+
+        return super().eventFilter(obj, event)  # 其余事件全部交还父类
