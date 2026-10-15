@@ -1,21 +1,28 @@
 // ============================================================================
 //  LocalConnect 手机端界面
 //
-//  本类只负责：界面、文件选择、把 MessageHandler 的回调反映到屏幕上。
+//  本类只负责：界面、把 MessageHandler 的回调反映到屏幕上。
 //  所有网络通信都在 MessageHandler 里，协议定义见项目根目录 PROTOCOL.md
+//
+//  项目流程：
+//    1. 手机把相册缩略图发给电脑
+//    2. 电脑端展示，用户挑一张
+//    3. 电脑按 id 请求原图，手机回传（阶段二，待实现）
 // ============================================================================
 
 package com.yalu.localconnect
 
-import android.net.Uri
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Button
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -25,12 +32,14 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
 
     companion object {
         private const val TAG = "LocalConnect"
+
+        /** 一次发送多少张缩略图。手机相册可能有上千张，先限制数量。 */
+        private const val THUMB_COUNT = 10
     }
 
     // ---------- 界面 ----------
     private lateinit var statusText: TextView
     private lateinit var logText: TextView
-    private lateinit var progressBar: ProgressBar
 
     // ---------- 通信 ----------
     // 用 lifecycleScope：Activity 销毁时协程自动取消，不会泄漏
@@ -39,16 +48,38 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
     // 缩略图发送器。this 一次充当两个角色：Context 和 MessageHandler.Callbacks
     private val thumbnailSender by lazy { ThumbnailSender(this, handler, this) }
 
-    // ---------- 文件选择 ----------
-    // 系统选择器 = 只有用户选中的那个文件被授权，所以不需要任何存储权限。
-    // 必须在 Activity 初始化阶段注册，否则无法在重建时接收结果。
-    private val filePicker = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri == null) {
-            log("已取消选择")
+    // ---------- 相册权限 ----------
+    // API 33 (Android 13) 起，媒体读取权限被拆成图片/视频/音频三个，
+    // READ_EXTERNAL_STORAGE 不再作用于图片。所以必须按版本选，
+    // 否则在低版本上会「申请一个系统不认识的权限」→ 直接拒绝且不弹框。
+    private val mediaPermission: String
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
         } else {
-            handler.uploadFile(uri, this)
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+    /**
+     * 权限申请的结果回调。
+     * 和文件选择器一样，必须在 Activity 初始化阶段注册，不能等到点击时才注册。
+     */
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        if (granted) {
+            log("✅ 已获得相册权限")
+            // 授权成功后接着把刚才被拦下的那次发送做完
+            lifecycleScope.launch { thumbnailSender.sendRecent(THUMB_COUNT) }
+        } else {
+            // shouldShowRequestPermissionRationale 为 false 有两种可能：
+            //   ① 用户勾了「不再询问」→ 永久拒绝
+            //   ② 从未申请过
+            // 在「刚刚被拒绝」这个上下文里，false 只可能是永久拒绝。
+            if (!shouldShowRequestPermissionRationale(mediaPermission)) {
+                log("❌ 权限被永久拒绝，请到「设置 → 应用 → LocalConnect → 权限」手动开启")
+            } else {
+                log("❌ 你拒绝了相册权限")
+            }
         }
     }
 
@@ -59,8 +90,6 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
 
         statusText = findViewById(R.id.statusText)
         logText = findViewById(R.id.logText)
-        progressBar = findViewById(R.id.progressBar)
-        val pickButton = findViewById<Button>(R.id.pickButton)
         val thumbButton = findViewById<Button>(R.id.thumbButton)
 
         // edge-to-edge 会让内容画到系统栏下面，需自己补内边距。
@@ -72,15 +101,16 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
             insets
         }
 
-        pickButton.setOnClickListener {
-            // "*/*" 表示任意类型；改成 "image/*" 则只让选图片
-            filePicker.launch(arrayOf("*/*"))
-        }
-
-        // 点一下就把最近 10 张图的缩略图发给电脑。
-        // sendRecent 是挂起函数（内部要查相册、解码、发网络），所以放进协程
+        // 点一下就把最近的缩略图发给电脑。
+        // 先检查权限：没授权的话 getRecent 会返回空列表（不报错），
+        // 表现为「点了按钮什么都没发生」，很难查。
         thumbButton.setOnClickListener {
-            lifecycleScope.launch { thumbnailSender.sendRecent(10) }
+            if (hasMediaPermission()) {
+                lifecycleScope.launch { thumbnailSender.sendRecent(THUMB_COUNT) }
+            } else {
+                log("需要相册权限才能读取图片，正在申请…")
+                requestMediaPermission()
+            }
         }
 
         // 连接与收消息都不阻塞界面
@@ -106,15 +136,6 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
         }
     }
 
-    override fun onUploadProgress(percent: Int, sentBytes: Long) {
-        runOnUiThread {
-            // 回调已按 256KB 节流过，这里不必再判重。
-            // sentBytes 暂未使用，保留参数是为了将来能显示已发送字节数。
-            progressBar.progress = percent
-            statusText.text = "上传中 $percent%"
-        }
-    }
-
     // ========================================================================
     //  内部
     // ========================================================================
@@ -123,13 +144,22 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
      * 同时输出到 logcat 和界面。
      *
      * 这个函数【假定自己运行在主线程】——它直接改 UI。
-     * 所以所有可能来自后台线程的调用点，都必须先切回主线程
-     * （见上面三个回调里的 runOnUiThread）。
+     * 所以所有可能来自后台线程的调用点，都必须先切回主线程。
      */
     private fun log(message: String) {
         Log.d(TAG, message)
         logText.append("$message\n")
         statusText.text = message
+    }
+
+    /** 是否已获得相册权限。 */
+    private fun hasMediaPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, mediaPermission) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** 申请相册权限。结果回到 permissionLauncher。 */
+    private fun requestMediaPermission() {
+        permissionLauncher.launch(mediaPermission)
     }
 
     override fun onDestroy() {

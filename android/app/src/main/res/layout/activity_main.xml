@@ -6,36 +6,11 @@
     android:orientation="vertical"
     android:padding="16dp">
 
-    <LinearLayout
+    <Button
+        android:id="@+id/thumbButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/pickButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="选择文件并上传" />
-
-        <Button
-            android:id="@+id/thumbButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:text="发送缩略图" />
-
-    </LinearLayout>
-
-    <ProgressBar
-        android:id="@+id/progressBar"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:max="100"
-        android:progress="0" />
+        android:text="发送相册缩略图" />
 
     <TextView
         android:id="@+id/statusText"

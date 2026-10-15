@@ -68,18 +68,25 @@ class ThumbnailSender(
     private val callbacks: MessageHandler.Callbacks,
 ) {
     companion object {
-        private const val THUMB_SIZE = 200   // 缩略图边长（px）
-        private const val JPEG_QUALITY = 70  // 压缩质量 0~100
+        const val THUMB_SIZE = 200   // 缩略图边长（px）
+        const val JPEG_QUALITY = 70  // 压缩质量 0~100
     }
 
-    /** 查询、生成、发送三合一。查询与解码都会阻塞，调用方应放在 IO 线程或协程里。 */
-    suspend fun sendRecent(limit: Int) {
+    /**
+     * 查询、生成、发送三合一。查询与解码都会阻塞，调用方应放在协程里。
+     * 尺寸和质量有默认值，一般不用传。
+     */
+    suspend fun sendRecent(
+        limit: Int,
+        size: Int = THUMB_SIZE,
+        jpegQuality: Int = JPEG_QUALITY,
+    ) {
         callbacks.onLog("准备缩略图（最多 $limit 张）")
 
         val photos = getRecent(context, limit)
         callbacks.onLog("  查到 ${photos.size} 张图片")
 
-        val thumbnails = loadThumbnails(context, photos, THUMB_SIZE, JPEG_QUALITY)
+        val thumbnails = loadThumbnails(context, photos, size, jpegQuality)
         callbacks.onLog("  生成 ${thumbnails.size} 张缩略图")
 
         messageHandler.sendThumb(thumbnails, callbacks)
