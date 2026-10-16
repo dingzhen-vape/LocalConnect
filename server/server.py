@@ -1,4 +1,6 @@
 # server.py — 电脑端 WebSocket 服务端（纯网络逻辑，不含任何界面代码）
+from __future__ import annotations
+
 import asyncio
 import io
 import json

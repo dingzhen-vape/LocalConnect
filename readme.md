@@ -20,6 +20,8 @@ cd server
 
 然后在电脑上点中一张图，按 `Ctrl+C` —— 图片已经在剪贴板里了。
 
+想做成单文件 exe 分发的话，见 [tools/build-exe.ps1](tools/build-exe.ps1) 顶部的说明。
+
 ## 目录
 
 ```
