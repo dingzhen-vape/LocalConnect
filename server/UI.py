@@ -94,9 +94,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("LocalConnect")
         self.resize(720, 560)
 
-        # 当前显示的缩略图数量
-        self._count = 0
-
         # 已显示过的 id。同一张重复发来时跳过，否则界面会堆满重复的图。
         self._shown: set[str] = set()
 
@@ -207,12 +204,15 @@ class MainWindow(QMainWindow):
         self.listWidget.addItem(item)
 
         self._shown.add(thumb_id)
-        self._count += 1
 
-    @property
-    def thumbnailCount(self) -> int:
-        """当前已显示的缩略图数量。"""
-        return self._count
+    def clearThumbnails(self):
+        """清空网格，让新一批缩略图从零开始铺。
+
+        _shown 必须跟着一起清：只 clear() 列表的话，新批次里 id 相同的图
+        会被 addThumbnail 当成「已显示」直接跳过，界面上就会缺图。
+        """
+        self.listWidget.clear()
+        self._shown.clear()
 
     def selectedThumbId(self) -> str | None:
         """当前选中项的 id；没有选中则返回 None。

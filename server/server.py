@@ -3,7 +3,6 @@ import asyncio
 import io
 import json
 import typing
-from pathlib import Path
 
 import PIL
 import PIL.Image
@@ -15,9 +14,6 @@ import Enums
 
 if typing.TYPE_CHECKING:
     from UI import MainWindow  # noqa: TC004
-
-# 模块级常量：全大写下划线
-UPLOAD_DIR = Path(__file__).parent / "uploads"
 
 # 监听端口。app.py 的单实例检测也用它，所以抽出来避免两处硬编码。
 SERVER_PORT = 8000
@@ -57,27 +53,31 @@ def getPictureDib(data: bytes) -> bytes:
 class ServerCore:
     """WebSocket 服务端。
 
-    职责：接收手机发来的缩略图，存进内存，并通知外部。
+    职责：接收手机发来的缩略图与原图。
 
-    它【不 import 任何 Qt 类】——只通过回调把消息传出去。
-    好处：网络逻辑能脱离界面独立测试，将来换界面也不需要改这里。
+    它直接持有 MainWindow，收到缩略图就调它 —— 界面完全不碰网络，
+    网络这一侧知道界面。这是本项目刻意选的耦合方式：省掉一层回调注入。
     """
 
     def __init__(self, Window: MainWindow):
-        """
-        :param on_thumbnail: 每收到一张缩略图就调用，参数是 (id, JPEG 字节)
-        """
         self.MainWindow = Window
         self.thumbs: dict[str, bytes] = {}  # id -> JPEG 字节（内存缓存）
         self.current_ws: websockets.ServerConnection = None
 
     async def doFetchOriginalPicture(self, thumb_id: str):
-        if self.current_ws is None:
+        # 先取到局部变量：下面 await 期间 self.current_ws 可能被别的协程改掉
+        ws = self.current_ws
+        if ws is None:
             logger.warning("没有已连接的手机，无法请求原图")
             return
-        await self.current_ws.send(
-            json.dumps({"type": "fetch_original", "id": thumb_id})
-        )
+        try:
+            await ws.send(json.dumps({"type": "fetch_original", "id": thumb_id}))
+        except Exception as e:
+            # 手机断开后 current_ws 还指着那条死连接，往它 send 必然失败。
+            # 清掉它，否则下一次 Ctrl+C 还会撞上同一根死管道
+            logger.error(f"请求原图失败: {type(e).__name__}: {e}")
+            if self.current_ws is ws:
+                self.current_ws = None
 
     async def start(self):
         """启动服务，并一直运行下去。"""
@@ -98,11 +98,26 @@ class ServerCore:
         mode = None
         original_buf = bytearray()
 
-        async for msg in ws:
+        while True:
+            try:
+                msg = await ws.recv()
+            except websockets.exceptions.ConnectionClosed:
+                # 手机异常断开（没发 close 帧）时 recv() 抛这个，正常关闭也走这里。
+                # 连接结束是常态不是错误 —— 让它冒出去只会换来 websockets 一整段
+                # "connection handler failed" 堆栈，而下面真正该执行的清理反而被跳过
+                break
+
             if isinstance(msg, str):  # 文本帧 = 控制消息
                 m = json.loads(msg)
 
                 if m["type"] == "thumb_begin":
+                    # 上一批已经结束（state 回到 IDLE）说明这是新一批的开头 → 清掉旧的。
+                    # 不能见一个 thumb_begin 就清：它每张图都会发，清 500 次等于只剩最后一张
+                    if state == Enums.States.IDLE:
+                        self.thumbs.clear()
+                        self.MainWindow.clearThumbnails()
+                        logger.info("新的一批缩略图，已清空旧缓存与界面")
+
                     thumb_id = str(m["id"])  # 统一成字符串
                     state = Enums.States.UP_LOADING
                     mode = Enums.Modes.THUMB
@@ -124,8 +139,12 @@ class ServerCore:
                     state = Enums.States.DOWN_LOADING
                     mode = Enums.Modes.FULL
                 elif m["type"] == "original_end":
-                    sendToClipboard(getPictureDib(original_buf))
-                    logger.info(f"接收完成: {m['id']}")
+                    try:
+                        sendToClipboard(getPictureDib(original_buf))
+                        logger.info(f"接收完成: {m['id']}")
+                    except Exception as e:
+                        # 一张坏图不该把整条连接带走（那又会绕回上面那个清理被跳过的坑）
+                        logger.warning(f"原图处理失败: {type(e).__name__}: {e}")
                     state = Enums.States.IDLE
                     mode = None
                     original_buf = bytearray()  # 丢掉引用，让那几 MB 立刻可回收
@@ -139,4 +158,8 @@ class ServerCore:
                     self.MainWindow.addThumbnail(thumb_id, msg)
                 elif mode == Enums.Modes.FULL and state == Enums.States.DOWN_LOADING:
                     original_buf.extend(msg)
+
+        # 只在「还是我这条连接」时才清 —— 否则会把后连上的那台手机顶掉
+        if self.current_ws is ws:
+            self.current_ws = None
         logger.info(f"客户端断开: {ws.remote_address}")

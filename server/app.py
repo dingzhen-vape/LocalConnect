@@ -18,7 +18,7 @@ from loguru import logger
 from PyQt6.QtWidgets import QApplication
 from qasync import QEventLoop
 
-from server import SERVER_PORT, UPLOAD_DIR, ServerCore
+from server import SERVER_PORT, ServerCore
 from UI import MainWindow
 
 # 日志配置
@@ -38,24 +38,6 @@ logger.add(
 )
 
 
-def loadCachedThumbnails() -> dict[str, bytes]:
-    """读取 uploads/ 里已有的缩略图，让界面一打开就有东西看。
-
-    只看 thumb_*.jpg —— 这是我们约定给缩略图的命名。
-    """
-    result: dict[str, bytes] = {}
-    if not UPLOAD_DIR.exists():
-        return result
-
-    for path in sorted(UPLOAD_DIR.glob("thumb_*.jpg")):
-        thumb_id = path.stem.removeprefix("thumb_")
-        try:
-            result[thumb_id] = path.read_bytes()
-        except OSError as e:
-            logger.warning(f"读取缓存缩略图失败 {path.name}: {e}")
-    return result
-
-
 def portIsBusy(port: int) -> bool:
     """检测端口是否已被占用，用来拦住"重复启动"。
 
@@ -68,6 +50,25 @@ def portIsBusy(port: int) -> bool:
             return False
         except OSError:
             return True
+
+
+def getLocalIp() -> str:
+    """猜出「手机该连哪个地址」。
+
+    ⚠️ 别用 socket.gethostbyname(socket.gethostname())：Windows 上它经常返回
+    虚拟网卡（VPN）的地址，或者干脆解析失败。
+    这里 connect 一个外网地址 —— UDP connect 不会真的发包，只是逼系统查一次
+    路由表，于是问出「出网走哪张网卡」，拿到的就是手机能连上的那个。
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 80))
+        return probe.getsockname()[0]
+    except OSError:
+        # 完全没网时（比如只有回环）没有可用的对外地址
+        return "127.0.0.1"
+    finally:
+        probe.close()
 
 
 def main() -> int:
@@ -86,7 +87,10 @@ def main() -> int:
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 
+    ip = getLocalIp()
     window = MainWindow()
+    # 地址放进标题栏：换网络后 IP 会变，手机端要照着改，放这儿一眼就能看到
+    window.setWindowTitle(f"LocalConnect — 手机连 {ip}:{SERVER_PORT}")
     window.show()
 
     # 服务端每收到一张缩略图就回调这里 → 直接更新界面。
@@ -99,6 +103,8 @@ def main() -> int:
 
     window.fetchRequested.connect(onFetchOriginal)
 
+    logger.info(f"手机端请填: {ip}:{SERVER_PORT}")
+    logger.info("手机连不上就先放行防火墙：以管理员身份运行 tools/allow-firewall.bat")
     logger.info("界面已就绪，等待手机连接…")
 
     with loop:
