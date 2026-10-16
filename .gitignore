@@ -1,5 +1,6 @@
 # ---- Python ----
 server/.venv/
+server/.venv-build/
 __pycache__/
 *.py[cod]
 
@@ -17,6 +18,12 @@ android/.idea/
 server/uploads/
 server/test.bin
 server-serverlog.txt
+
+# ---- Nuitka 打包产物（server/build 是最终 exe，另外三个是中间目录）----
+server/build/
+server/*.build/
+server/*.dist/
+server/*.onefile-build/
 
 # 用 tools/ 下脚本生成的测试图片（推送到模拟器相册用的），不是项目资源
 tools/test-images/
