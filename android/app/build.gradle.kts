@@ -28,6 +28,11 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+
+            // 复用 debug 签名。这样 release 包能直接覆盖手机上已有的 debug 包
+            // —— 签名必须一致，否则要卸载重装、应用数据一起丢。
+            // 想正式发布（上架、长期维护）再换成自己的 keystore。
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
