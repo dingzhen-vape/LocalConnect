@@ -25,6 +25,9 @@ server/*.build/
 server/*.dist/
 server/*.onefile-build/
 
+# Nuitka 的缓存目录：%LOCALAPPDATA%\Nuitka 在这台机器上不可写，用 NUITKA_CACHE_DIR 指到了这里
+.nuitka-cache/
+
 # 用 tools/ 下脚本生成的测试图片（推送到模拟器相册用的），不是项目资源
 tools/test-images/
 
