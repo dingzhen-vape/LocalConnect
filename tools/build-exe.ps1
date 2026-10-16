@@ -1,41 +1,64 @@
-# 把服务端编译成单文件 exe（用 Nuitka，不用 PyInstaller）。
+# Build the server into a single-file exe with Nuitka (not PyInstaller).
 #
-# 产物：server/build/LocalConnect.exe（约 25 MB）
+# Output: server/build/LocalConnect.exe (~25 MB)
 #
 # ---------------------------------------------------------------------------
-# 首次使用前，先准备编译环境（只做一次）
+# One-time setup
 # ---------------------------------------------------------------------------
 #   uv python install 3.12
 #   uv venv --python 3.12 server/.venv-build
 #   uv pip install --python server/.venv-build/Scripts/python.exe --no-cache -r server/requirements.txt nuitka
 #
-# 为什么要单独搞一个 3.12：Nuitka 从 Python 3.13 起不再支持 MinGW 后端
-# （会直接报 "cannot use '--mingw64' on Python version 3.13 or higher"），
-# 而退回去用 MSVC 得装 2~4 GB 的 VS Build Tools。装个 3.12 便宜得多。
-# 这个 venv 只用来编译，不影响 server/.venv 里那套 Python 3.14 的运行环境。
+# Why a separate 3.12: Nuitka dropped the MinGW backend for Python 3.13+
+# ("cannot use '--mingw64' on Python version 3.13 or higher"). The other way is
+# MSVC via VS Build Tools, a 2-4 GB download. This venv is only used for
+# building; it does not touch the runtime venv in server/.venv.
 #
 # ---------------------------------------------------------------------------
-# 下面这些参数不是随便写的，每个都对应一个踩过的坑
+# Every flag below exists because of a specific failure. Do not "clean up".
 # ---------------------------------------------------------------------------
-#   NUITKA_CACHE_DIR : Nuitka 默认缓存在 %LOCALAPPDATA%\Nuitka，
-#                      这台机器上建不了（failed to create cache directory）
-#   TEMP / TMP       : 系统 %TEMP% 不可写，gcc 链接时会报
-#                      "Cannot create temporary file ... Error 3"
-#   --onefile-tempdir-spec : onefile 是「运行时解压到临时目录再启动」，
-#                      默认解压到 %TEMP%（同样不可写，报 failed to open app.dll）。
-#                      指到 exe 自己旁边，所以 exe 别放到 Program Files 这类只读位置
-#   --include-package : websockets 用惰性导入（imports.py 里的 __getattr__），
-#                      静态分析看不见，不加就会 ModuleNotFoundError: websockets.asyncio
+#   NUITKA_CACHE_DIR
+#       Nuitka caches under %LOCALAPPDATA%\Nuitka, which is not writable on
+#       this machine -> "failed to create cache directory".
+#   TEMP / TMP
+#       The system %TEMP% is not writable either -> the gcc link step fails
+#       with "Cannot create temporary file ... Error 3".
+#   --onefile-tempdir-spec
+#       A onefile exe extracts its payload to a temp dir at startup; the
+#       default is %TEMP% (not writable) -> "failed to open app.dll".
+#       Pointed at the exe's own directory, so do NOT ship the exe from a
+#       read-only location such as C:\Program Files.
+#   --include-package
+#       websockets imports lazily (__getattr__ in imports.py), which static
+#       analysis cannot see -> "ModuleNotFoundError: websockets.asyncio".
+#   --windows-icon-from-ico
+#       The exe icon. Windows only accepts .ico. icon/localconnect.ico is
+#       generated from icon/<source>.png; to regenerate after changing the
+#       source image:
+#         python -c "from PIL import Image; Image.open('icon/x.png').save('icon/localconnect.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+#   ErrorActionPreference
+#       Nuitka writes progress to stderr. PowerShell turns native stderr into
+#       an error record, and under 'Stop' that aborts the build halfway.
+#
+# NOTE: keep this file pure ASCII. Windows PowerShell 5.1 decodes .ps1 as GBK,
+# and a UTF-8 file without BOM breaks on the first non-ASCII character
+# ("string is missing the terminator"). The .bat wrapper next to this file has
+# the same constraint, plus it needs CRLF line endings.
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path $PSScriptRoot -Parent
 $python = Join-Path $root 'server\.venv-build\Scripts\python.exe'
+$icon = Join-Path $root 'server\icon\localconnect.ico'
 
 if (-not (Test-Path $python)) {
-    Write-Host "找不到编译用的 Python: $python"
-    Write-Host "请先按本文件顶部的说明准备 server/.venv-build"
+    Write-Host "Build interpreter not found: $python"
+    Write-Host "See the one-time setup notes at the top of this file."
+    exit 1
+}
+if (-not (Test-Path $icon)) {
+    Write-Host "Icon not found: $icon"
     exit 1
 }
 
@@ -46,6 +69,10 @@ New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
 
 Push-Location (Join-Path $root 'server')
 try {
+    # Loosen EAP around the native call only: Nuitka's progress goes to stderr.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
     & $python -m nuitka `
         --standalone `
         --onefile `
@@ -53,6 +80,7 @@ try {
         --enable-plugin=pyqt6 `
         --assume-yes-for-downloads `
         --windows-console-mode=force `
+        --windows-icon-from-ico=icon/localconnect.ico `
         '--onefile-tempdir-spec={PROGRAM_DIR}/LocalConnect_tmp' `
         --include-package=websockets `
         --include-package=qasync `
@@ -60,6 +88,10 @@ try {
         --output-dir=build `
         --output-filename=LocalConnect.exe `
         app.py
+
+    $nuitkaExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($nuitkaExit -ne 0) { Write-Host "nuitka exited with code $nuitkaExit" }
 } finally {
     Pop-Location
 }
@@ -68,8 +100,8 @@ $exe = Join-Path $root 'server\build\LocalConnect.exe'
 if (Test-Path $exe) {
     $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
     Write-Host ""
-    Write-Host "完成: $exe ($mb MB)"
+    Write-Host "Built: $exe ($mb MB)"
 } else {
-    Write-Host "没有生成 exe，往上翻看看编译错在哪"
+    Write-Host "No exe produced; scroll up for the compiler error."
     exit 1
 }
