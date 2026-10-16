@@ -13,11 +13,15 @@
 package com.yalu.localconnect
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,16 +38,29 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
         private const val TAG = "LocalConnect"
 
         /** 一次发送多少张缩略图。手机相册可能有上千张，先限制数量。 */
-        private const val THUMB_COUNT = 10
+        private const val THUMB_COUNT = 500
+
+        // 服务端地址存在这里。同一网络下 IP 通常不变，但换网络/路由器重分配后会变，
+        // 到时在界面上改一次即可，不用重新编译。
+        private const val PREFS = "localconnect"
+        private const val KEY_HOST = "server_host"
+
+        /** 没存过地址时的兜底：10.0.2.2 是模拟器里指向宿主机的别名 */
+        private const val DEFAULT_HOST = "10.0.2.2:8000"
+        private const val DEFAULT_PORT = "8000"
     }
 
     // ---------- 界面 ----------
     private lateinit var statusText: TextView
     private lateinit var logText: TextView
+    private lateinit var ipInput: EditText
 
     // ---------- 通信 ----------
-    // 用 lifecycleScope：Activity 销毁时协程自动取消，不会泄漏
-    private val handler by lazy { MessageHandler(this, lifecycleScope) }
+    // 用 lifecycleScope：Activity 销毁时协程自动取消，不会泄漏。
+    // 地址来自存储；运行时改了走 handler.updateServerUrl()，不必重建这个对象。
+    private val handler by lazy {
+        MessageHandler(this, lifecycleScope, buildUrl(serverHost()))
+    }
 
     // 缩略图发送器。this 一次充当两个角色：Context 和 MessageHandler.Callbacks
     private val thumbnailSender by lazy { ThumbnailSender(this, handler, this) }
@@ -85,12 +102,29 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 屏幕常亮。realme 一关屏就把 App 冻进 freezer cgroup
+        // （OplusHansManager: freeze uid=... scene: LcdOff），协程和 socket 全部停摆，
+        // 连接必断。这个 flag 只在 Activity 可见时生效，退到后台会自动失效，不会一直耗电。
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
 
         statusText = findViewById(R.id.statusText)
         logText = findViewById(R.id.logText)
+        ipInput = findViewById(R.id.ipInput)
+        val saveIpButton = findViewById<Button>(R.id.saveIpButton)
         val thumbButton = findViewById<Button>(R.id.thumbButton)
+
+        // 输入框里回填上次用过的地址
+        ipInput.setText(serverHost())
+        saveIpButton.setOnClickListener { applyServerHost() }
+        // 键盘上的「完成」也当保存，省得去够按钮
+        ipInput.setOnEditorActionListener { _, _, _ ->
+            applyServerHost()
+            true
+        }
 
         // edge-to-edge 会让内容画到系统栏下面，需自己补内边距。
         // 系统栏尺寸变化（旋转、弹键盘）时这个 lambda 会再次触发。
@@ -115,6 +149,54 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
 
         // 连接与收消息都不阻塞界面
         handler.connect(this)
+    }
+
+    // ========================================================================
+    //  服务端地址
+    // ========================================================================
+
+    /** 上次保存的地址；没存过或存的是空串就用兜底值。 */
+    private fun serverHost(): String =
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_HOST, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_HOST
+
+    /**
+     * 把输入框里的内容拼成 ws:// URL。
+     *
+     * 容忍几种写法：带不带 ws:// 前缀、末尾多个斜杠、首尾空格。
+     * 没写端口就补上默认端口 —— 否则 ws://1.2.3.4 会去连 80 端口，
+     * 症状只是「连不上」，很难联想到是端口的问题。
+     */
+    private fun buildUrl(host: String): String {
+        val h = host.trim()
+            .removePrefix("ws://")
+            .removePrefix("wss://")
+            .trimEnd('/')
+        return if (h.contains(':')) "ws://$h" else "ws://$h:$DEFAULT_PORT"
+    }
+
+    /** 保存输入框里的地址，并立即用它重连。 */
+    private fun applyServerHost() {
+        val host = ipInput.text.toString().trim()
+        if (host.isEmpty()) {
+            log("⚠️ 先填电脑的 IP，比如 172.19.222.106")
+            return
+        }
+
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_HOST, host)
+            .apply()
+
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(ipInput.windowToken, 0)
+
+        val url = buildUrl(host)
+        log("已保存服务端地址: $url")
+        handler.updateServerUrl(url) // 先停掉旧地址的重连循环
+        handler.connect(this)        // 再用新地址连一次
     }
 
     // ========================================================================

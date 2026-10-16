@@ -6,6 +6,7 @@ import android.provider.MediaStore
 import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.cio.endpoint
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
@@ -32,12 +33,18 @@ import org.json.JSONObject
 class MessageHandler(
     private val context: Context,
     private val scope: CoroutineScope,
+    initialServerUrl: String = DEFAULT_SERVER_URL,
 ) {
+    // 可以被 updateServerUrl() 改掉。重连循环每次都读当前值，
+    // 所以换地址只是「下一次连哪」变了，不需要重建这个对象。
+    private var serverUrl = initialServerUrl
+
     companion object {
         private const val TAG = "MessageHandler"
 
-        // 模拟器用 10.0.2.2（宿主机别名）；真机填电脑局域网 IP，如 10.151.3.98
-        private const val SERVER_URL = "ws://10.0.2.2:8000"
+        // 兜底地址，只在「用户从没在界面上保存过」时用。
+        // 正常路径是 MainActivity 从 SharedPreferences 读出地址传进来。
+        private const val DEFAULT_SERVER_URL = "ws://10.0.2.2:8000"
 
         private const val CHUNK = 1024 * 1024 // 1 MB
 
@@ -55,7 +62,20 @@ class MessageHandler(
     }
 
     // HttpClient 内部有连接池和线程池，一个实例就够了
-    private val client = HttpClient(CIO) { install(WebSockets) }
+    private val client = HttpClient(CIO) {
+        install(WebSockets)
+        engine {
+            endpoint {
+                // ★ CIO 的 socketTimeout 默认 5000ms，对 WebSocket 这种长连接是致命的：
+                //   空闲 5 秒没有读写就把 socket 关掉（服务端会看到「接入 → 5 秒 → 断开」）。
+                //   ⚠️ 别写 0 —— Ktor 会当成「立即超时」，实测 62ms 就抛 SocketTimeoutException。
+                //   类型是 Long，给个极大的值表示「几乎不超时」。
+                //   连接不用自己保活：服务端 websockets 默认每 20 秒 ping 一次。
+                socketTimeout = Long.MAX_VALUE
+                connectTimeout = 10_000
+            }
+        }
+    }
 
     // 跨协程共享的状态：连接、发送、清理都要用它
     private var session: DefaultClientWebSocketSession? = null
@@ -82,6 +102,16 @@ class MessageHandler(
                 delay(RETRY_DELAY_MS) // 被取消时从这里抛出，循环随之结束
             }
         }
+    }
+
+    /**
+     * 换服务端地址：只停掉旧地址的重连循环，自己不会发起连接。
+     * 调用方随后必须再 [connect] 一次，否则会一直停在那儿。
+     */
+    fun updateServerUrl(url: String) {
+        if (url == serverUrl) return
+        serverUrl = url
+        connectJob?.cancel()
     }
 
     /** 发送一批缩略图。会取消上一次未完成的发送，避免两批数据交错。 */
@@ -114,10 +144,10 @@ class MessageHandler(
 
     /** 一条连接的完整生命周期：连上 → 收消息 → 断开。返回即代表这次连接结束。 */
     private suspend fun connectAndReceive(callbacks: Callbacks) {
-        callbacks.onLog("准备连接 $SERVER_URL")
+        callbacks.onLog("准备连接 $serverUrl")
         try {
             // 挂起函数：完成 WebSocket 握手后才返回会话
-            val ws = client.webSocketSession(SERVER_URL)
+            val ws = client.webSocketSession(serverUrl)
             session = ws
             callbacks.onLog("✅ 已连接（WebSocket 会话已建立）")
             callbacks.onConnectionChanged(true)
