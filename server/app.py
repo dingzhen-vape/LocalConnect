@@ -18,6 +18,7 @@ from loguru import logger
 from PyQt6.QtWidgets import QApplication
 from qasync import QEventLoop
 
+import discovery
 from server import SERVER_PORT, ServerCore
 from UI import MainWindow
 
@@ -97,6 +98,8 @@ def main() -> int:
     # 因为 qasync 让两者跑在同一线程，所以不需要跨线程信号。
     core = ServerCore(window)
     loop.create_task(core.start())
+    # 自动发现是独立的 UDP 服务，和 WebSocket 各跑一个协程
+    loop.create_task(discovery.start(SERVER_PORT))
 
     def onFetchOriginal(thumb_id: str):
         loop.create_task(core.doFetchOriginalPicture(thumb_id))

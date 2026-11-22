@@ -47,7 +47,9 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
 
         /** 没存过地址时的兜底：10.0.2.2 是模拟器里指向宿主机的别名 */
         private const val DEFAULT_HOST = "10.0.2.2:8000"
-        private const val DEFAULT_PORT = "8000"
+
+        /** WebSocket 与 UDP 自动发现共用同一个端口号 */
+        private const val DEFAULT_PORT = 8000
     }
 
     // ---------- 界面 ----------
@@ -147,8 +149,8 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
             }
         }
 
-        // 连接与收消息都不阻塞界面
-        handler.connect(this)
+        // 先试自动发现，再连接。连接与收消息都不阻塞界面
+        discoverThenConnect()
     }
 
     // ========================================================================
@@ -161,6 +163,36 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
             .getString(KEY_HOST, null)
             ?.takeIf { it.isNotBlank() }
             ?: DEFAULT_HOST
+
+    /** 把地址写进 SharedPreferences。 */
+    private fun saveHost(host: String) {
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_HOST, host)
+            .apply()
+    }
+
+    /**
+     * 先多播找电脑，找到了用它的地址，找不到回退到上次存的地址，然后连接。
+     *
+     * 顺序不能反：handler 是 lazy 的，第一次访问时才构造。这里先 saveHost
+     * 再碰 handler，构造时读到的就已经是新地址，省掉一次「连错再重连」。
+     */
+    private fun discoverThenConnect() {
+        statusText.text = "正在查找电脑…"
+        lifecycleScope.launch {
+            val ip = Discovery.find(DEFAULT_PORT)
+            if (ip != null) {
+                val host = "$ip:$DEFAULT_PORT"
+                log("🔍 发现电脑: $host")
+                saveHost(host) // 存下来，下次多播失败时就是兜底地址
+                handler.updateServerUrl(buildUrl(host))
+            } else {
+                log("⚠️ 没发现电脑，尝试上次的地址 ${serverHost()}")
+            }
+            handler.connect(this@MainActivity)
+        }
+    }
 
     /**
      * 把输入框里的内容拼成 ws:// URL。
@@ -185,10 +217,7 @@ class MainActivity : AppCompatActivity(), MessageHandler.Callbacks {
             return
         }
 
-        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_HOST, host)
-            .apply()
+        saveHost(host)
 
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
             .hideSoftInputFromWindow(ipInput.windowToken, 0)
