@@ -28,6 +28,14 @@
 #       default is %TEMP% (not writable) -> "failed to open app.dll".
 #       Pointed at the exe's own directory, so do NOT ship the exe from a
 #       read-only location such as C:\Program Files.
+#   --jobs=2
+#       The onefile payload is zstd level 22, which allocates roughly 200 MB
+#       per worker thread. The default job limit is the CPU count, and this
+#       box has 32 logical cores -> "ZstdError: Unable to compress Zstandard
+#       data: Allocation error : not enough memory" (15.2 GB RAM, only 1.8 GB
+#       free while building). Two workers finish at the same compression ratio
+#       without the spike; parallelism matters little because compilation is
+#       cached after the first run.
 #   --include-package
 #       websockets imports lazily (__getattr__ in imports.py), which static
 #       analysis cannot see -> "ModuleNotFoundError: websockets.asyncio".
@@ -81,6 +89,7 @@ try {
         --assume-yes-for-downloads `
         --windows-console-mode=force `
         --windows-icon-from-ico=icon/localconnect.ico `
+        --jobs=2 `
         '--onefile-tempdir-spec={PROGRAM_DIR}/LocalConnect_tmp' `
         --include-package=websockets `
         --include-package=qasync `
